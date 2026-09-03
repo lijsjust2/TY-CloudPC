@@ -9,11 +9,12 @@
   <table class="table">
     <thead>
       <tr>
-        <th style="width:18%">名称</th>
-        <th style="width:22%">天翼账号</th>
-        <th style="width:20%">状态</th>
-        <th style="width:22%">云电脑</th>
-        <th style="width:18%">操作</th>
+        <th style="width:16%">名称</th>
+        <th style="width:20%">天翼账号</th>
+        <th style="width:18%">状态</th>
+        <th style="width:12%">运行时间</th>
+        <th style="width:18%">云电脑</th>
+        <th style="width:16%">操作</th>
       </tr>
     </thead>
     <tbody id="accBody">
@@ -28,6 +29,7 @@
           <span class="badge" data-f="badge">{{statusText .Status}}</span>
           <div class="cell-msg muted small" data-f="msg" {{if not .Message}}hidden{{end}}>{{.Message}}</div>
         </td>
+        <td data-f="uptime">{{if .Uptime}}<span class="muted small">{{.Uptime}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
         <td data-f="desktops">
           {{if .Desktops}}
             {{range .Desktops}}<div>{{.Name}}</div>{{end}}
@@ -40,7 +42,7 @@
         </td>
       </tr>
       <tr class="sms-row" data-id="{{.ID}}" hidden>
-        <td colspan="5">
+        <td colspan="6">
           <div class="sms-box">
             <input class="sms-input" data-f="sms-input" placeholder="请输入验证码" maxlength="8" inputmode="numeric">
             <button class="btn sm primary" data-f="sms-submit">提交验证码</button>
@@ -198,6 +200,10 @@ function applyStatus(a) {
   const msg = row.querySelector('[data-f=msg]');
   msg.textContent = a.message || '';
   msg.hidden = !a.message;
+  const upCell = row.querySelector('[data-f=uptime]');
+  upCell.innerHTML = a.status === 'running' && a.uptime
+    ? '<span class="muted small">' + esc(a.uptime) + '</span>'
+    : '<span class="muted">-</span>';
   const dCell = row.querySelector('[data-f=desktops]');
   const ds = a.desktops || [];
   dCell.innerHTML = ds.length

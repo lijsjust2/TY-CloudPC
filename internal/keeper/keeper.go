@@ -49,7 +49,11 @@ type AccountStatus struct {
 	DeviceCode string          `json:"deviceCode,omitempty"`
 	Status     string          `json:"status"`
 	Message    string          `json:"message,omitempty"`
-	Desktops   []DesktopStatus `json:"desktops,omitempty"`
+	// RunningSince 进入运行态的时刻（unix 秒）；重启任务后重新计时
+	RunningSince int64 `json:"runningSince,omitempty"`
+	// Uptime 运行时长（服务端按查询时刻计算，如 "3天 4小时"），仅运行中账号有值
+	Uptime  string          `json:"uptime,omitempty"`
+	Desktops []DesktopStatus `json:"desktops,omitempty"`
 }
 
 // Manager 管理所有账号的保活任务
@@ -175,16 +179,35 @@ func (m *Manager) ResendSMS(id int) error {
 	return nil
 }
 
-// Statuses 返回所有账号状态（按 ID 排序）
+// Statuses 返回所有账号状态（按 ID 排序），运行中的账号附带实时运行时长
 func (m *Manager) Statuses() []AccountStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now().Unix()
 	out := make([]AccountStatus, 0, len(m.runners))
 	for _, r := range m.runners {
-		out = append(out, r.status)
+		s := r.status
+		if s.Status == StatusRunning && s.RunningSince > 0 && now >= s.RunningSince {
+			s.Uptime = formatUptime(now - s.RunningSince)
+		}
+		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// formatUptime 秒数人性化：3天 4小时 / 5小时 32分 / 12分 / 45秒
+func formatUptime(sec int64) string {
+	switch {
+	case sec < 60:
+		return fmt.Sprintf("%d秒", sec)
+	case sec < 3600:
+		return fmt.Sprintf("%d分%d秒", sec/60, sec%60)
+	case sec < 86400:
+		return fmt.Sprintf("%d小时%d分", sec/3600, sec%3600/60)
+	default:
+		return fmt.Sprintf("%d天%d小时", sec/86400, sec%86400/3600)
+	}
 }
 
 // Logs 查询日志
@@ -271,7 +294,14 @@ func (r *runner) run(ctx context.Context) {
 		}
 	}
 
-	r.set(func(s *AccountStatus) { s.Status = StatusRunning; s.Message = "正在获取云电脑列表"; s.Desktops = nil })
+	r.set(func(s *AccountStatus) {
+		s.Status = StatusRunning
+		s.Message = "正在获取云电脑列表"
+		s.Desktops = nil
+		if s.RunningSince == 0 {
+			s.RunningSince = time.Now().Unix() // 进入运行态，运行时间从此计时
+		}
+	})
 	desktops, err := api.ListDesktops(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
