@@ -62,13 +62,16 @@ type AccountStatus struct {
 type Manager struct {
 	mu      sync.Mutex
 	runners map[int]*runner
-	logs    *LogBuffer
+	// stoppedClients 已停止账号保留的登录会话，重新启动时优先复用（免重新登录）
+	stoppedClients map[int]*ctyun.Client
+	logs           *LogBuffer
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		runners: make(map[int]*runner),
-		logs:    NewLogBuffer(2000),
+		runners:        make(map[int]*runner),
+		stoppedClients: make(map[int]*ctyun.Client),
+		logs:           NewLogBuffer(2000),
 	}
 }
 
@@ -78,7 +81,7 @@ func (m *Manager) StartAll() {
 		if !a.IsEnabled() {
 			continue
 		}
-		m.startRunner(a)
+		m.startRunner(a, nil)
 	}
 }
 
@@ -88,7 +91,7 @@ func (m *Manager) Add(name, username, password, deviceCode string) error {
 	if err != nil {
 		return err
 	}
-	m.startRunner(*a)
+	m.startRunner(*a, nil)
 	return nil
 }
 
@@ -98,7 +101,7 @@ func (m *Manager) Update(id int, name, password string) error {
 	if err != nil {
 		return err
 	}
-	m.startRunner(*a)
+	m.startRunner(*a, nil)
 	return nil
 }
 
@@ -109,31 +112,33 @@ func (m *Manager) Delete(id int) bool {
 		r.cancel()
 		delete(m.runners, id)
 	}
+	delete(m.stoppedClients, id)
 	m.mu.Unlock()
 	return store.DeleteAccount(id)
 }
 
-// Restart 重启账号任务
+// Restart 重启账号任务（自动继承旧任务仍有效的登录会话，免重新登录）
 func (m *Manager) Restart(id int) error {
 	a := store.GetAccount(id)
 	if a == nil {
 		return fmt.Errorf("账号不存在")
 	}
-	m.startRunner(*a)
+	m.startRunner(*a, nil)
 	return nil
 }
 
-// RestartAll 重启全部任务（修改保活周期后调用；跳过已停用的账号）
+// RestartAll 重启全部任务（修改保活周期后调用；跳过已停用的账号，自动继承旧会话）
 func (m *Manager) RestartAll() {
 	for _, a := range store.ListAccounts() {
 		if !a.IsEnabled() {
 			continue
 		}
-		m.startRunner(a)
+		m.startRunner(a, nil)
 	}
 }
 
-// Stop 停止账号保活任务：取消任务并落盘停用状态（重启面板不会自动恢复）
+// Stop 停止账号保活任务：取消任务并落盘停用状态（重启面板不会自动恢复）；
+// 登录会话保留在内存中，短期内重新启动可复用免登录
 func (m *Manager) Stop(id int) error {
 	if _, err := store.SetAccountEnabled(id, false); err != nil {
 		return err
@@ -141,6 +146,9 @@ func (m *Manager) Stop(id int) error {
 	m.mu.Lock()
 	if r, ok := m.runners[id]; ok {
 		r.cancel()
+		if r.api != nil {
+			m.stoppedClients[id] = r.api
+		}
 		delete(m.runners, id)
 	}
 	m.mu.Unlock()
@@ -148,13 +156,17 @@ func (m *Manager) Stop(id int) error {
 	return nil
 }
 
-// Start 恢复账号保活任务
+// Start 恢复账号保活任务（优先复用停止前保留的登录会话）
 func (m *Manager) Start(id int) error {
 	a, err := store.SetAccountEnabled(id, true)
 	if err != nil {
 		return err
 	}
-	m.startRunner(*a)
+	m.mu.Lock()
+	reuse := m.stoppedClients[id]
+	delete(m.stoppedClients, id)
+	m.mu.Unlock()
+	m.startRunner(*a, reuse)
 	return nil
 }
 
@@ -271,23 +283,25 @@ func (m *Manager) MaxLogSeq() int {
 // ============================================================
 
 type runner struct {
-	mgr    *Manager
-	acct   store.Account
-	cancel context.CancelFunc
-	smsCh  chan string
+	mgr      *Manager
+	acct     store.Account
+	cancel   context.CancelFunc
+	smsCh    chan string
+	reuseAPI *ctyun.Client // 启动时可复用的旧登录会话（可能已过期，run 内验证）
 	// 以下字段由 mgr.mu 保护
 	status AccountStatus
-	api    *ctyun.Client // 待输入验证码时保留登录态，用于绑定/重发
+	api    *ctyun.Client // 登录成功后保留登录态，用于短信绑定/重发及停止后复用
 }
 
-func (m *Manager) startRunner(acct store.Account) {
+func (m *Manager) startRunner(acct store.Account, reuse *ctyun.Client) {
 	ctx, cancel := context.WithCancel(context.Background())
 	enabled := true
 	r := &runner{
-		mgr:    m,
-		acct:   acct,
-		cancel: cancel,
-		smsCh:  make(chan string, 8),
+		mgr:      m,
+		acct:     acct,
+		cancel:   cancel,
+		smsCh:    make(chan string, 8),
+		reuseAPI: reuse,
 		status: AccountStatus{
 			ID: acct.ID, Name: acct.Name, Username: acct.Username, DeviceCode: acct.DeviceCode,
 			Enabled: &enabled, Status: StatusStarting, Message: "正在登录",
@@ -295,6 +309,10 @@ func (m *Manager) startRunner(acct store.Account) {
 	}
 	m.mu.Lock()
 	if old, ok := m.runners[acct.ID]; ok {
+		// 未显式指定复用会话时，自动继承旧任务仍持有的登录态
+		if r.reuseAPI == nil && old.api != nil {
+			r.reuseAPI = old.api
+		}
 		old.cancel()
 	}
 	m.runners[acct.ID] = r
@@ -329,22 +347,44 @@ func (r *runner) run(ctx context.Context) {
 		return
 	}
 
-	api := ctyun.NewClient(r.acct.DeviceCode)
-	log("info", "开始登录")
-	if !api.Login(ctx, r.acct.Username, password, log) {
-		if ctx.Err() != nil {
-			return
+	// 优先复用旧登录会话（停止后重启 / 任务重启场景），有效则免重新登录
+	var api *ctyun.Client
+	if r.reuseAPI != nil {
+		r.set(func(s *AccountStatus) { s.Message = "正在恢复登录会话" })
+		if _, err := r.reuseAPI.ListDesktops(ctx); err == nil {
+			api = r.reuseAPI
+			log("ok", "复用上次登录会话，无需重新登录")
+		} else {
+			if ctx.Err() != nil {
+				return
+			}
+			log("info", "上次登录会话已过期，重新登录")
 		}
-		r.setError("登录失败，请检查账号密码后重试")
-		return
+		r.reuseAPI = nil
 	}
-	log("ok", "登录成功")
 
-	if !api.LoginInfo.BondedDevice {
-		if !r.bindDeviceFlow(ctx, api, log) {
+	if api == nil {
+		api = ctyun.NewClient(r.acct.DeviceCode)
+		log("info", "开始登录")
+		if !api.Login(ctx, r.acct.Username, password, log) {
+			if ctx.Err() != nil {
+				return
+			}
+			r.setError("登录失败，请检查账号密码后重试")
 			return
 		}
+		log("ok", "登录成功")
+
+		if !api.LoginInfo.BondedDevice {
+			if !r.bindDeviceFlow(ctx, api, log) {
+				return
+			}
+		}
 	}
+	// 登录态存入 runner，供短信重发 / 停止后复用
+	r.mgr.mu.Lock()
+	r.api = api
+	r.mgr.mu.Unlock()
 
 	r.set(func(s *AccountStatus) {
 		s.Status = StatusRunning
