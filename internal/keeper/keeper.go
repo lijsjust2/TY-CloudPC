@@ -215,6 +215,11 @@ func (m *Manager) Logs(after, accountID int) []LogEntry {
 	return m.logs.After(after, accountID)
 }
 
+// MaxLogSeq 当前最大日志序号（前端检测服务端重启用）
+func (m *Manager) MaxLogSeq() int {
+	return m.logs.MaxSeq()
+}
+
 // ============================================================
 // 单账号任务
 // ============================================================

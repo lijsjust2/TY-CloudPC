@@ -543,7 +543,7 @@ func handleAPILogs(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []keeper.LogEntry{}
 	}
-	jsonOut(w, map[string]any{"ok": true, "logs": logs})
+	jsonOut(w, map[string]any{"ok": true, "logs": logs, "maxSeq": manager.MaxLogSeq()})
 }
 
 // ============================================================

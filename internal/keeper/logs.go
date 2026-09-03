@@ -47,6 +47,13 @@ func (l *LogBuffer) Add(accountID int, account, desktop, level, msg string) {
 	}
 }
 
+// MaxSeq 返回缓冲区当前最大日志序号（前端用于检测服务端重启后 seq 回退）
+func (l *LogBuffer) MaxSeq() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seq
+}
+
 // After 返回序号大于 seq 的日志；accountID > 0 时只返回该账号的日志
 func (l *LogBuffer) After(seq, accountID int) []LogEntry {
 	l.mu.Lock()

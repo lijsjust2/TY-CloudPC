@@ -56,7 +56,22 @@ async function poll() {
   try {
     const r = await fetch('/api/logs?after=' + lastSeq + '&account=' + accountFilter);
     const j = await r.json();
-    if (j.ok && j.logs) j.logs.forEach(appendLine);
+    if (j.ok) {
+      // 服务端重启后 seq 回退，重置游标重拉全量
+      if (typeof j.maxSeq === 'number' && j.maxSeq < lastSeq) {
+        lastSeq = 0;
+        const r2 = await fetch('/api/logs?after=0&account=' + accountFilter);
+        const j2 = await r2.json();
+        pane.innerHTML = '';
+        if (j2.ok && j2.logs) { j2.logs.forEach(appendLine); lastSeq = j2.logs[j2.logs.length - 1].seq; }
+        setTimeout(poll, 2000);
+        return;
+      }
+      if (j.logs && j.logs.length) {
+        j.logs.forEach(appendLine);
+        lastSeq = j.logs[j.logs.length - 1].seq; // 推进游标，下一轮只拉增量
+      }
+    }
   } catch (e) { /* 忽略瞬时网络错误 */ }
   setTimeout(poll, 2000);
 }
