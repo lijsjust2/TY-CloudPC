@@ -1,0 +1,160 @@
+{{template "header" .}}
+
+<div class="page-head">
+  <h1>设置</h1>
+  <p class="muted">修改登录密码、配置通知推送、开启 2FA 二次验证</p>
+</div>
+
+{{if .Error}}<div class="alert error">{{.Error}}</div>{{end}}
+{{if .Success}}<div class="alert success">{{.Success}}</div>{{end}}
+
+<!-- ============== 1. 修改密码 ============== -->
+<section class="card">
+  <h2 style="margin-top:0;">🔑 修改登录密码</h2>
+  <form method="post" action="/settings/password" class="pwd-form form-stack" style="max-width:440px;">
+    <div class="field">
+      <label for="current_password">当前密码</label>
+      <input type="password" id="current_password" name="current_password" required autocomplete="current-password">
+    </div>
+    <div class="field">
+      <label for="new_password">新密码</label>
+      <input type="password" id="new_password" name="new_password" required minlength="6" placeholder="至少 6 位" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label for="confirm_password">确认新密码</label>
+      <input type="password" id="confirm_password" name="confirm_password" required minlength="6" autocomplete="new-password">
+    </div>
+    <button type="submit" class="btn primary">保存密码</button>
+  </form>
+</section>
+
+<!-- ============== 2. 推送渠道（公共） ============== -->
+<section class="card">
+  <h2 style="margin-top:0;">📢 推送渠道（公共设置）</h2>
+  <p class="muted small">Bark 与 PushPlus 可同时填写，参数供 2FA 登录验证码选用。</p>
+
+  <form method="post" action="/settings/channel" class="form-stack" id="channelForm" style="max-width:640px;">
+    <!-- Bark -->
+    <div id="barkChannel" style="border:1px solid #e3e8ee; border-radius:8px; padding:16px 18px; background:#fafbff;">
+      <div style="font-weight:600; margin-bottom:12px;">Bark 设置</div>
+      <div class="form-stack">
+        <div class="field">
+          <label for="bark_url">Bark 服务器地址</label>
+          <input type="text" id="bark_url" name="bark_url" placeholder="https://api.day.app" value="{{.Settings.BarkURL}}">
+          <p class="muted small" style="margin-top:2px;">公共服务器 <code>https://api.day.app</code>，自建填你的地址</p>
+        </div>
+        <div class="field">
+          <label for="bark_key">Bark 设备 Key</label>
+          <input type="text" id="bark_key" name="bark_key" placeholder="在 Bark App 首页复制那串字符" value="{{.Settings.BarkKey}}">
+        </div>
+        <div class="test-row">
+          <button type="button" class="btn" onclick="testChannel('bark')">🔔 测试 Bark 推送</button>
+          <span id="testBarkResult" class="muted small"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PushPlus -->
+    <div id="pushplusChannel" style="border:1px solid #e3e8ee; border-radius:8px; padding:16px 18px; background:#fdfbf5;">
+      <div style="font-weight:600; margin-bottom:12px;">PushPlus 设置</div>
+      <div class="form-stack">
+        <div class="field">
+          <label for="pushplus_token">PushPlus Token</label>
+          <input type="text" id="pushplus_token" name="pushplus_token" placeholder="登录 pushplus.plus 获取的 Token" value="{{.Settings.PushplusToken}}">
+          <p class="muted small" style="margin-top:2px;">访问 <a href="http://www.pushplus.plus" target="_blank">pushplus.plus</a> 用微信扫码登录后获取 Token，消息会发到你的微信</p>
+        </div>
+        <div class="test-row">
+          <button type="button" class="btn" onclick="testChannel('pushplus')">🔔 测试 PushPlus 推送</button>
+          <span id="testPushplusResult" class="muted small"></span>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <button type="submit" class="btn primary">💾 保存推送渠道</button>
+    </div>
+  </form>
+</section>
+
+<!-- ============== 3. 2FA 二次验证 ============== -->
+<section class="card">
+  <h2 style="margin-top:0;">🛡 2FA 二次验证</h2>
+  <p class="muted small">
+    开启后登录需要输入额外验证码；验证码通过上方公共推送渠道发送。
+    开启前必须先把对应渠道的 Bark/PushPlus 配置好并能成功推送（保存时会自动验证）。
+  </p>
+
+  <form method="post" action="/settings/2fa" class="form-stack" id="twofaForm" style="max-width:560px;">
+    <div class="field">
+      <label class="check-line"><input type="checkbox" name="two_fa_enabled" {{if .Settings.TwoFAEnabled}}checked{{end}}>启用二次验证</label>
+    </div>
+
+    <div class="field">
+      <label for="two_fa_channel">2FA 使用的推送渠道</label>
+      <select id="two_fa_channel" name="two_fa_channel">
+        <option value="bark" {{if ne .Settings.TwoFAChannel "pushplus"}}selected{{end}}>Bark（iOS）</option>
+        <option value="pushplus" {{if eq .Settings.TwoFAChannel "pushplus"}}selected{{end}}>PushPlus（微信）</option>
+      </select>
+      <p class="muted small" style="margin-top:4px;">参数直接从上方「推送渠道（公共设置）」读取；若想修改请到上方保存。</p>
+    </div>
+
+    <div class="test-row" style="flex-wrap:wrap;">
+      <button type="submit" class="btn primary">💾 保存 2FA 设置</button>
+      {{if .Settings.TwoFAEnabled}}
+      <span class="muted small" style="margin-left:8px;">当前状态：<b style="color:#16a34a;">✓ 已开启</b>，渠道 = <b>{{if eq .Settings.TwoFAChannel "pushplus"}}PushPlus{{else}}Bark{{end}}</b></span>
+      {{else}}
+      <span class="muted small" style="margin-left:8px;">当前状态：<b style="color:#64748b;">未开启</b></span>
+      {{end}}
+    </div>
+  </form>
+</section>
+
+<!-- ============== 4. 保活周期 ============== -->
+<section class="card">
+  <h2 style="margin-top:0;">⏳ 保活周期</h2>
+  <p class="muted small">每个周期在最小值与最大值之间随机取一个时长，保持到点后强制重连 WebSocket。随机间隔更接近真人使用习惯，取值范围 10 ~ 3600 秒，默认 60 秒。保存后全部保活任务将自动重启生效。</p>
+
+  <form method="post" action="/settings/keepalive" class="form-stack" style="max-width:440px;">
+    <div class="field">
+      <label for="keepalive_min">最小周期（秒）</label>
+      <input type="number" id="keepalive_min" name="keepalive_min" required min="10" max="3600" value="{{.KeepAliveMin}}">
+    </div>
+    <div class="field">
+      <label for="keepalive_max">最大周期（秒）</label>
+      <input type="number" id="keepalive_max" name="keepalive_max" required min="10" max="3600" value="{{.KeepAliveMax}}">
+      <p class="muted small" style="margin-top:4px;">两个值相同时即为固定周期</p>
+    </div>
+    <button type="submit" class="btn primary">💾 保存保活周期</button>
+  </form>
+</section>
+
+<script>
+async function testChannel(which) {
+  const provider = which;
+  const bark_url = document.getElementById('bark_url').value || 'https://api.day.app';
+  const bark_key = document.getElementById('bark_key').value;
+  const pushplus_token = document.getElementById('pushplus_token').value;
+  const resultEl = provider === 'bark' ? document.getElementById('testBarkResult') : document.getElementById('testPushplusResult');
+  const btn = event && event.target;
+  if (btn) btn.disabled = true;
+  resultEl.style.color = '';
+  resultEl.textContent = '发送中...';
+  try {
+    const res = await fetch('/settings/channel/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ provider, bark_url, bark_key, pushplus_token }),
+    });
+    const data = await res.json();
+    if (data.ok) { resultEl.textContent = '✓ 测试消息已发送，请查收'; resultEl.style.color = '#28a745'; }
+    else { resultEl.textContent = '✗ ' + data.error; resultEl.style.color = '#dc3545'; }
+  } catch (e) {
+    resultEl.textContent = '✗ ' + e.message;
+    resultEl.style.color = '#dc3545';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+</script>
+
+{{template "footer" .}}

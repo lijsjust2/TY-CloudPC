@@ -1,0 +1,66 @@
+{{template "header" .}}
+<div class="page-head">
+  <h1>运行日志</h1>
+</div>
+
+<div class="card">
+  <div class="log-toolbar">
+    <select id="logAccount" class="select">
+      <option value="0">全部账号</option>
+      {{range .Accounts}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+    </select>
+    <label class="chk"><input type="checkbox" id="autoScroll" checked> 自动滚动</label>
+    <button class="btn sm" id="clearView">清屏</button>
+  </div>
+  <div class="log-pane" id="logPane">
+    <div class="log-empty muted">暂无日志</div>
+  </div>
+</div>
+
+<script>
+let lastSeq = 0;
+let accountFilter = 0;
+const pane = document.getElementById('logPane');
+
+document.getElementById('logAccount').addEventListener('change', function () {
+  accountFilter = parseInt(this.value, 10) || 0;
+  lastSeq = 0;
+  pane.innerHTML = '<div class="log-empty muted">暂无日志</div>';
+});
+
+document.getElementById('clearView').addEventListener('click', function () {
+  pane.innerHTML = '<div class="log-empty muted">暂无日志</div>';
+});
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function appendLine(e) {
+  const empty = pane.querySelector('.log-empty');
+  if (empty) empty.remove();
+  const nearBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
+  const div = document.createElement('div');
+  div.className = 'log-line lv-' + e.level;
+  const parts = ['[' + e.time + ']', '[' + e.account + ']'];
+  if (e.desktop) parts.push('[' + e.desktop + ']');
+  div.textContent = parts.join('') + ' ' + e.message;
+  pane.appendChild(div);
+  while (pane.children.length > 2000) pane.removeChild(pane.firstChild);
+  if (nearBottom && document.getElementById('autoScroll').checked) {
+    pane.scrollTop = pane.scrollHeight;
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/logs?after=' + lastSeq + '&account=' + accountFilter);
+    const j = await r.json();
+    if (j.ok && j.logs) j.logs.forEach(appendLine);
+  } catch (e) { /* 忽略瞬时网络错误 */ }
+  setTimeout(poll, 2000);
+}
+
+poll();
+</script>
+{{template "footer" .}}

@@ -1,0 +1,15 @@
+﻿services:
+  ctyun-panel:
+    build: .
+    container_name: ctyun-panel
+    ports:
+      - "8882:8882"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - ADMIN_PASSWORD=修改为你的面板密码
+      # - PORT=8882
+      # - OCR_URL=https://orc.1999111.xyz/ocr
+      # - COOKIE_SECURE=true
+      # - TRUST_PROXY=true
+    restart: unless-stopped

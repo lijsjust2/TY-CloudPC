@@ -1,0 +1,150 @@
+name: Docker Build and Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（用于命名镜像文件，如 1.0.0；留空默认 latest）'
+        required: false
+        default: 'latest'
+        type: string
+      create_release:
+        description: '是否创建 GitHub Release 并附加镜像下载（建议填写具体版本号）'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Go 交叉编译在构建机原生完成，QEMU 仅用于运行阶段 apk add 等目标架构指令
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Determine version
+        id: rel
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "本次版本: $VERSION"
+
+      # ---- AMD64：构建 + 导出 tar ----
+      - name: Build AMD64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: ctyun-panel:${{ steps.rel.outputs.version }}-amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export AMD64 image
+        run: |
+          docker save ctyun-panel:${{ steps.rel.outputs.version }}-amd64 | gzip > ctyun-panel_${{ steps.rel.outputs.version }}_linux_amd64.tar.gz
+          ls -lh ctyun-panel_*.tar.gz
+
+      # ---- ARM64：构建 + 导出 tar（Go 交叉编译，构建无需 QEMU 模拟，速度与 AMD64 一致）----
+      - name: Build ARM64 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: ctyun-panel:${{ steps.rel.outputs.version }}-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Export ARM64 image
+        run: |
+          docker save ctyun-panel:${{ steps.rel.outputs.version }}-arm64 | gzip > ctyun-panel_${{ steps.rel.outputs.version }}_linux_arm64.tar.gz
+          ls -lh ctyun-panel_*.tar.gz
+
+      - name: Generate checksums
+        run: |
+          sha256sum ctyun-panel_*_linux_*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      # ---- 可选：推多架构镜像到 Docker Hub（配置了 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets 时自动启用）----
+      - name: Check Docker Hub config
+        id: dh
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "push=true" >> $GITHUB_OUTPUT
+          else
+            echo "push=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to Docker Hub
+        if: steps.dh.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push multi-arch image to Docker Hub
+        if: steps.dh.outputs.push == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/ctyun-panel:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/ctyun-panel:${{ steps.rel.outputs.version }}
+          cache-from: type=gha
+
+      # ---- 创建 GitHub Release，附上两个架构的镜像 tar ----
+      - name: Create GitHub Release
+        if: github.event_name == 'push' || inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', steps.rel.outputs.version) }}
+          name: TY CloudPC v${{ steps.rel.outputs.version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            ctyun-panel_*_linux_*.tar.gz
+            checksums.txt
+          body: |
+            ## TY CloudPC v${{ steps.rel.outputs.version }}
+
+            天翼云电脑保活面板（Go 版）：多账号管理、网页输入短信验证码、Bark/PushPlus 2FA、实时日志、随机区间保活周期。
+
+            ### 支持架构
+            - **AMD64** (x86_64) — 普通 PC / 服务器 / 云主机
+            - **ARM64** (aarch64) — 树莓派 / ARM 服务器 / ARM 云主机 / 电视盒子
+
+            ### 从 Releases 下载镜像离线部署
+            ```bash
+            # 下载对应架构的 tar.gz 后导入（示例为 amd64）
+            docker load -i ctyun-panel_${{ steps.rel.outputs.version }}_linux_amd64.tar.gz
+
+            # 运行
+            docker run -d \
+              --name ctyun-panel \
+              -p 8882:8882 \
+              -v ./data:/app/data \
+              -e TZ=Asia/Shanghai \
+              --restart unless-stopped \
+              ctyun-panel:${{ steps.rel.outputs.version }}-amd64
+            ```
+
+            ### 数据与配置
+            - 数据目录挂载到 `/app/data`（含面板账号、天翼账号凭据、加密密钥、会话密钥）；从原 C# 版迁移时在「添加账号」填入原 deviceCode 可免重新绑定设备
+            - 环境变量：`PORT`（默认 8882）、`TZ`、`ADMIN_PASSWORD`（仅首次部署生效，可选）、`OCR_URL`（可选）、`COOKIE_SECURE`（HTTPS 时开启）、`TRUST_PROXY`（反代时开启）

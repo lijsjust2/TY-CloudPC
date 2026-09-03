@@ -1,0 +1,33 @@
+{{define "header"}}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - TY CloudPC</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{{if .Username}}
+<nav class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/accounts">TY CloudPC</a>
+    <div class="nav-links">
+      <a href="/accounts" {{if eq .Active "accounts"}}class="active"{{end}}>账号</a>
+      <a href="/logs" {{if eq .Active "logs"}}class="active"{{end}}>日志</a>
+      <a href="/settings" {{if eq .Active "settings"}}class="active"{{end}}>设置</a>
+    </div>
+    <div class="nav-right">
+      <span class="muted">{{.Username}}</span>
+      <form method="post" action="/logout" class="inline"><button type="submit" class="btn sm">退出</button></form>
+    </div>
+  </div>
+</nav>
+{{end}}
+<div class="container">
+{{end}}
+
+{{define "footer"}}
+</div>
+</body>
+</html>
+{{end}}

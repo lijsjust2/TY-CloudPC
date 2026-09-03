@@ -1,0 +1,225 @@
+{{template "header" .}}
+<div class="page-head">
+  <h1>账号管理</h1>
+  <button class="btn primary" onclick="openAddModal()">添加账号</button>
+</div>
+<p class="muted small" style="margin-top:-8px">保活周期：{{if eq .KeepAliveMin .KeepAliveMax}}{{.KeepAliveMin}} 秒{{else}}{{.KeepAliveMin}} ~ {{.KeepAliveMax}} 秒随机{{end}}（可在「设置」中修改）。首次添加账号如需绑定设备，状态会变为「待输入验证码」，输入短信验证码即可完成绑定。</p>
+
+<div class="card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th style="width:18%">名称</th>
+        <th style="width:22%">天翼账号</th>
+        <th style="width:20%">状态</th>
+        <th style="width:22%">云电脑</th>
+        <th style="width:18%">操作</th>
+      </tr>
+    </thead>
+    <tbody id="accBody">
+      {{range .Accounts}}
+      <tr data-id="{{.ID}}">
+        <td class="acc-name">{{.Name}}</td>
+        <td>
+          <div class="acc-user">{{.Username}}</div>
+          <div class="muted small mono acc-device">{{.DeviceCode}}</div>
+        </td>
+        <td>
+          <span class="badge" data-f="badge">{{statusText .Status}}</span>
+          <div class="cell-msg muted small" data-f="msg" {{if not .Message}}hidden{{end}}>{{.Message}}</div>
+        </td>
+        <td data-f="desktops">
+          {{if .Desktops}}
+            {{range .Desktops}}<div>{{.Name}}</div>{{end}}
+          {{else}}<span class="muted">-</span>{{end}}
+        </td>
+        <td class="row-actions">
+          <button class="btn sm" data-f="restart">重试</button>
+          <button class="btn sm" data-f="edit">编辑</button>
+          <button class="btn sm danger" data-f="delete">删除</button>
+        </td>
+      </tr>
+      <tr class="sms-row" data-id="{{.ID}}" hidden>
+        <td colspan="5">
+          <div class="sms-box">
+            <input class="sms-input" data-f="sms-input" placeholder="请输入验证码" maxlength="8" inputmode="numeric">
+            <button class="btn sm primary" data-f="sms-submit">提交验证码</button>
+            <button class="btn sm" data-f="sms-resend">重发验证码</button>
+          </div>
+        </td>
+      </tr>
+      {{else}}
+      <tr id="emptyRow"><td colspan="5" class="muted" style="text-align:center;padding:32px 0">暂无账号，点击右上角「添加账号」开始</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<!-- 添加账号弹窗（仅通过 取消 / 关闭 按钮关闭） -->
+<div class="modal-mask" id="addModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span>添加账号</span>
+      <button class="modal-close" onclick="closeModal('addModal')">关闭</button>
+    </div>
+    <form id="addForm">
+      <div class="field">
+        <label>名称（选填）</label>
+        <input name="name" maxlength="50" placeholder="用于区分账号，留空则使用天翼账号">
+      </div>
+      <div class="field">
+        <label>天翼账号</label>
+        <input name="username" required maxlength="64" placeholder="请输入天翼账号（手机号）">
+      </div>
+      <div class="field">
+        <label>天翼密码</label>
+        <input name="password" type="password" required maxlength="128" placeholder="请输入天翼密码">
+      </div>
+      <div class="field">
+        <label>deviceCode（选填）</label>
+        <input name="device_code" maxlength="64" placeholder="web_ 开头的设备码，用于从原版迁移">
+        <p class="muted small" style="margin-top:4px;">从原 C# 版（leleji/CtYun）部署迁移过来时，填入原 devices/ 目录里的设备码可免重新绑定设备；留空则自动生成。</p>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" onclick="closeModal('addModal')">取消</button>
+        <button type="submit" class="btn primary" id="addSubmitBtn">添加</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 编辑账号弹窗 -->
+<div class="modal-mask" id="editModal" hidden>
+  <div class="modal">
+    <div class="modal-head">
+      <span>编辑账号</span>
+      <button class="modal-close" onclick="closeModal('editModal')">关闭</button>
+    </div>
+    <form id="editForm">
+      <div class="field">
+        <label>名称</label>
+        <input name="name" maxlength="50" placeholder="用于区分账号">
+      </div>
+      <div class="field">
+        <label>新密码（留空表示不修改）</label>
+        <input name="password" type="password" maxlength="128" placeholder="留空则保持原密码">
+      </div>
+      <p class="muted small">修改密码后沿用原设备码，无需重新绑定设备；保存后任务将自动重启。</p>
+      <div class="modal-foot">
+        <button type="button" class="btn" onclick="closeModal('editModal')">取消</button>
+        <button type="submit" class="btn primary" id="editSubmitBtn">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const STATUS_TEXT = {starting:'启动中', awaiting_sms:'待输入验证码', running:'保活中', error:'异常', stopped:'已停止'};
+let editID = 0;
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams(body || {}),
+  });
+  return r.json();
+}
+
+function openModal(id) { document.getElementById(id).hidden = false; }
+function closeModal(id) { document.getElementById(id).hidden = true; }
+function openAddModal() { document.getElementById('addForm').reset(); openModal('addModal'); }
+
+document.getElementById('addForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const btn = document.getElementById('addSubmitBtn');
+  btn.disabled = true;
+  const j = await post('/accounts/add', {name: fd.get('name'), username: fd.get('username'), password: fd.get('password'), device_code: fd.get('device_code')});
+  btn.disabled = false;
+  if (j.ok) { closeModal('addModal'); location.reload(); }
+  else { alert(j.error || '添加失败'); }
+});
+
+document.getElementById('editForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const btn = document.getElementById('editSubmitBtn');
+  btn.disabled = true;
+  const j = await post('/accounts/' + editID + '/edit', {name: fd.get('name'), password: fd.get('password')});
+  btn.disabled = false;
+  if (j.ok) { closeModal('editModal'); location.reload(); }
+  else { alert(j.error || '保存失败'); }
+});
+
+document.getElementById('accBody').addEventListener('click', async function (e) {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const tr = btn.closest('tr[data-id]');
+  if (!tr) return;
+  const id = tr.dataset.id;
+  if (btn.dataset.f === 'restart') {
+    const j = await post('/accounts/' + id + '/restart');
+    if (!j.ok) alert(j.error || '操作失败');
+  } else if (btn.dataset.f === 'edit') {
+    editID = id;
+    const f = document.getElementById('editForm');
+    f.reset();
+    f.querySelector('[name=name]').value = tr.querySelector('.acc-name').textContent;
+    openModal('editModal');
+  } else if (btn.dataset.f === 'delete') {
+    if (!confirm('确定删除该账号并停止保活？')) return;
+    const j = await post('/accounts/' + id + '/delete');
+    if (j.ok) location.reload(); else alert(j.error || '删除失败');
+  } else if (btn.dataset.f === 'sms-submit') {
+    const input = tr.nextElementSibling.querySelector('[data-f=sms-input]');
+    const code = input.value.trim();
+    if (!code) { alert('请输入验证码'); return; }
+    const j = await post('/accounts/' + id + '/sms', {code});
+    if (!j.ok) alert(j.error || '提交失败');
+    else input.value = '';
+  } else if (btn.dataset.f === 'sms-resend') {
+    const j = await post('/accounts/' + id + '/resend');
+    if (!j.ok) alert(j.error || '重发失败');
+  }
+  refresh();
+});
+
+function applyStatus(a) {
+  const row = document.querySelector('#accBody tr[data-id="' + a.id + '"]');
+  if (!row) return;
+  const badge = row.querySelector('[data-f=badge]');
+  badge.textContent = STATUS_TEXT[a.status] || a.status;
+  badge.className = 'badge st-' + a.status;
+  const msg = row.querySelector('[data-f=msg]');
+  msg.textContent = a.message || '';
+  msg.hidden = !a.message;
+  const dCell = row.querySelector('[data-f=desktops]');
+  const ds = a.desktops || [];
+  dCell.innerHTML = ds.length
+    ? ds.map(d => '<div>' + esc(d.name || d.code) +
+        (d.lastConnect ? ' <span class="muted small">重连 ' + esc(d.lastConnect) + '</span>' : '') + '</div>').join('')
+    : '<span class="muted">-</span>';
+  const smsRow = document.querySelector('#accBody tr.sms-row[data-id="' + a.id + '"]');
+  if (smsRow) smsRow.hidden = a.status !== 'awaiting_sms';
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/accounts');
+    const j = await r.json();
+    if (!j.ok) return;
+    j.accounts.forEach(applyStatus);
+    const empty = document.getElementById('emptyRow');
+    if (empty && j.accounts.length > 0) empty.remove();
+  } catch (e) { /* 忽略瞬时网络错误 */ }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+{{template "footer" .}}
