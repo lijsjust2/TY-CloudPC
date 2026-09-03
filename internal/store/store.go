@@ -43,6 +43,13 @@ type Account struct {
 	PasswordEnc string `json:"password_enc"` // AES-256-GCM 加密后的天翼密码
 	DeviceCode  string `json:"device_code"`
 	CreatedAt   string `json:"created_at,omitempty"`
+	// Enabled 是否启用保活（用户在面板手动停止后为 false，重启面板不会自动恢复）
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// IsEnabled 账号是否启用（未设置时默认启用）
+func (a *Account) IsEnabled() bool {
+	return a.Enabled == nil || *a.Enabled
 }
 
 type dataFile struct {
@@ -302,6 +309,21 @@ func UpdateAccount(id int, name, password string) (*Account, error) {
 	return nil, fmt.Errorf("账号不存在")
 }
 
+// SetAccountEnabled 启用/停用账号保活（停用状态落盘，重启面板不自动恢复）
+func SetAccountEnabled(id int, enabled bool) (*Account, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range data.Accounts {
+		if data.Accounts[i].ID == id {
+			data.Accounts[i].Enabled = &enabled
+			saveLocked()
+			a := data.Accounts[i]
+			return &a, nil
+		}
+	}
+	return nil, fmt.Errorf("账号不存在")
+}
+
 func DeleteAccount(id int) bool {
 	mu.Lock()
 	defer mu.Unlock()
@@ -338,7 +360,7 @@ func SetKeepAlive(min, max int) {
 	saveLocked()
 }
 
-// clampKeepAlive 区间钳制：下限 10、上限 3600，min > max 时交换
+// clampKeepAlive 区间钳制：下限 10、上限 120（服务端单连接存活上限），min > max 时交换
 func clampKeepAlive(min, max *int) {
 	if *min < 10 {
 		*min = 10
@@ -346,11 +368,11 @@ func clampKeepAlive(min, max *int) {
 	if *max < 10 {
 		*max = 10
 	}
-	if *min > 3600 {
-		*min = 3600
+	if *min > 120 {
+		*min = 120
 	}
-	if *max > 3600 {
-		*max = 3600
+	if *max > 120 {
+		*max = 120
 	}
 	if *min > *max {
 		*min, *max = *max, *min

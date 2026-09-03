@@ -49,11 +49,13 @@ type AccountStatus struct {
 	DeviceCode string          `json:"deviceCode,omitempty"`
 	Status     string          `json:"status"`
 	Message    string          `json:"message,omitempty"`
+	// Enabled 是否启用保活（false = 用户手动停止）
+	Enabled *bool `json:"enabled"`
 	// RunningSince 进入运行态的时刻（unix 秒）；重启任务后重新计时
 	RunningSince int64 `json:"runningSince,omitempty"`
 	// Uptime 运行时长（服务端按查询时刻计算，如 "3天 4小时"），仅运行中账号有值
-	Uptime  string          `json:"uptime,omitempty"`
-	Desktops []DesktopStatus `json:"desktops,omitempty"`
+	Uptime    string          `json:"uptime,omitempty"`
+	Desktops  []DesktopStatus `json:"desktops,omitempty"`
 }
 
 // Manager 管理所有账号的保活任务
@@ -70,9 +72,12 @@ func NewManager() *Manager {
 	}
 }
 
-// StartAll 启动所有已存账号的保活任务（程序启动时调用）
+// StartAll 启动所有已存账号的保活任务（程序启动时调用；跳过已停用的账号）
 func (m *Manager) StartAll() {
 	for _, a := range store.ListAccounts() {
+		if !a.IsEnabled() {
+			continue
+		}
 		m.startRunner(a)
 	}
 }
@@ -118,11 +123,39 @@ func (m *Manager) Restart(id int) error {
 	return nil
 }
 
-// RestartAll 重启全部任务（修改保活周期后调用）
+// RestartAll 重启全部任务（修改保活周期后调用；跳过已停用的账号）
 func (m *Manager) RestartAll() {
 	for _, a := range store.ListAccounts() {
+		if !a.IsEnabled() {
+			continue
+		}
 		m.startRunner(a)
 	}
+}
+
+// Stop 停止账号保活任务：取消任务并落盘停用状态（重启面板不会自动恢复）
+func (m *Manager) Stop(id int) error {
+	if _, err := store.SetAccountEnabled(id, false); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if r, ok := m.runners[id]; ok {
+		r.cancel()
+		delete(m.runners, id)
+	}
+	m.mu.Unlock()
+	m.logs.Add(id, "", "", "info", "已手动停止保活")
+	return nil
+}
+
+// Start 恢复账号保活任务
+func (m *Manager) Start(id int) error {
+	a, err := store.SetAccountEnabled(id, true)
+	if err != nil {
+		return err
+	}
+	m.startRunner(*a)
+	return nil
 }
 
 // SubmitSMS 提交短信验证码（设备绑定）
@@ -185,12 +218,25 @@ func (m *Manager) Statuses() []AccountStatus {
 	defer m.mu.Unlock()
 	now := time.Now().Unix()
 	out := make([]AccountStatus, 0, len(m.runners))
+	running := make(map[int]bool, len(m.runners))
 	for _, r := range m.runners {
 		s := r.status
+		running[r.acct.ID] = true
 		if s.Status == StatusRunning && s.RunningSince > 0 && now >= s.RunningSince {
 			s.Uptime = formatUptime(now - s.RunningSince)
 		}
 		out = append(out, s)
+	}
+	// 已停用的账号：无任务运行，但列表仍需展示「已停止」状态
+	for _, a := range store.ListAccounts() {
+		if running[a.ID] {
+			continue
+		}
+		enabled := a.IsEnabled()
+		out = append(out, AccountStatus{
+			ID: a.ID, Name: a.Name, Username: a.Username, DeviceCode: a.DeviceCode,
+			Status: StatusStopped, Message: "已停止（未启动保活）", Enabled: &enabled,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -236,6 +282,7 @@ type runner struct {
 
 func (m *Manager) startRunner(acct store.Account) {
 	ctx, cancel := context.WithCancel(context.Background())
+	enabled := true
 	r := &runner{
 		mgr:    m,
 		acct:   acct,
@@ -243,7 +290,7 @@ func (m *Manager) startRunner(acct store.Account) {
 		smsCh:  make(chan string, 8),
 		status: AccountStatus{
 			ID: acct.ID, Name: acct.Name, Username: acct.Username, DeviceCode: acct.DeviceCode,
-			Status: StatusStarting, Message: "正在登录",
+			Enabled: &enabled, Status: StatusStarting, Message: "正在登录",
 		},
 	}
 	m.mu.Lock()

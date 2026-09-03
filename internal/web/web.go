@@ -76,6 +76,8 @@ func New(m *keeper.Manager) http.Handler {
 	mux.HandleFunc("POST /accounts/add", handleAccountAdd)
 	mux.HandleFunc("POST /accounts/{id}/delete", handleAccountDelete)
 	mux.HandleFunc("POST /accounts/{id}/restart", handleAccountRestart)
+	mux.HandleFunc("POST /accounts/{id}/stop", handleAccountStop)
+	mux.HandleFunc("POST /accounts/{id}/start", handleAccountStart)
 	mux.HandleFunc("POST /accounts/{id}/edit", handleAccountEdit)
 	mux.HandleFunc("POST /accounts/{id}/sms", handleAccountSMS)
 	mux.HandleFunc("POST /accounts/{id}/resend", handleAccountResend)
@@ -474,6 +476,32 @@ func handleAccountRestart(w http.ResponseWriter, r *http.Request) {
 	okOut(w)
 }
 
+func handleAccountStop(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		errOut(w, "账号 ID 无效")
+		return
+	}
+	if err := manager.Stop(id); err != nil {
+		errOut(w, err.Error())
+		return
+	}
+	okOut(w)
+}
+
+func handleAccountStart(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		errOut(w, "账号 ID 无效")
+		return
+	}
+	if err := manager.Start(id); err != nil {
+		errOut(w, err.Error())
+		return
+	}
+	okOut(w)
+}
+
 func handleAccountEdit(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
@@ -598,8 +626,8 @@ func handleSettingsKeepalive(w http.ResponseWriter, r *http.Request) {
 	f := form(r)
 	minVal, err1 := strconv.Atoi(strings.TrimSpace(f["keepalive_min"]))
 	maxVal, err2 := strconv.Atoi(strings.TrimSpace(f["keepalive_max"]))
-	if err1 != nil || err2 != nil || minVal < 10 || maxVal < 10 || minVal > 3600 || maxVal > 3600 {
-		render(w, "settings.html", settingsPage(r, "保活周期必须是 10 ~ 3600 之间的整数（秒）", ""))
+	if err1 != nil || err2 != nil || minVal < 10 || maxVal < 10 || minVal > 120 || maxVal > 120 {
+		render(w, "settings.html", settingsPage(r, "保活周期必须是 10 ~ 120 之间的整数（秒），不能超过服务端单连接 120 秒存活上限", ""))
 		return
 	}
 	if minVal > maxVal {

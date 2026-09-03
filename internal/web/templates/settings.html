@@ -112,17 +112,17 @@
 <!-- ============== 4. 保活周期 ============== -->
 <section class="card">
   <h2 style="margin-top:0;">⏳ 保活周期</h2>
-  <p class="muted small">每个周期在最小值与最大值之间随机取一个时长，保持到点后强制重连 WebSocket。随机间隔更接近真人使用习惯，取值范围 10 ~ 3600 秒，默认 60 秒。保存后全部保活任务将自动重启生效。</p>
+  <p class="muted small">每个周期在最小值与最大值之间随机取一个时长，保持到点后强制重连 WebSocket。随机间隔更接近真人使用习惯。注意：天翼服务端对单条连接有约 120 秒的存活上限，超过会被强制断开，因此最大周期限制为 120 以内（10 ~ 120 秒），默认 60 秒。保存后全部保活任务将自动重启生效。</p>
 
   <form method="post" action="/settings/keepalive" class="form-stack" style="max-width:440px;">
     <div class="field">
       <label for="keepalive_min">最小周期（秒）</label>
-      <input type="number" id="keepalive_min" name="keepalive_min" required min="10" max="3600" value="{{.KeepAliveMin}}">
+      <input type="number" id="keepalive_min" name="keepalive_min" required min="10" max="120" value="{{.KeepAliveMin}}">
     </div>
     <div class="field">
       <label for="keepalive_max">最大周期（秒）</label>
-      <input type="number" id="keepalive_max" name="keepalive_max" required min="10" max="3600" value="{{.KeepAliveMax}}">
-      <p class="muted small" style="margin-top:4px;">两个值相同时即为固定周期</p>
+      <input type="number" id="keepalive_max" name="keepalive_max" required min="10" max="120" value="{{.KeepAliveMax}}">
+      <p class="muted small" style="margin-top:4px;">不能超过 120（服务端单连接存活上限）；两个值相同时即为固定周期</p>
     </div>
     <button type="submit" class="btn primary">💾 保存保活周期</button>
   </form>

@@ -36,7 +36,9 @@
           {{else}}<span class="muted">-</span>{{end}}
         </td>
         <td class="row-actions">
-          <button class="btn sm" data-f="restart">重试</button>
+          <button class="btn sm danger" data-f="stop" {{if not .Enabled}}hidden{{end}}>停止</button>
+          <button class="btn sm primary" data-f="start" {{if .Enabled}}hidden{{end}}>启动</button>
+          <button class="btn sm" data-f="restart" {{if not .Enabled}}hidden{{end}}>重试</button>
           <button class="btn sm" data-f="edit">编辑</button>
           <button class="btn sm danger" data-f="delete">删除</button>
         </td>
@@ -167,6 +169,15 @@ document.getElementById('accBody').addEventListener('click', async function (e) 
   if (btn.dataset.f === 'restart') {
     const j = await post('/accounts/' + id + '/restart');
     if (!j.ok) alert(j.error || '操作失败');
+  } else if (btn.dataset.f === 'stop') {
+    if (!confirm('确定停止该账号的保活？停止后云电脑可能被回收，可随时重新启动。')) return;
+    const j = await post('/accounts/' + id + '/stop');
+    if (!j.ok) alert(j.error || '操作失败');
+    else location.reload();
+  } else if (btn.dataset.f === 'start') {
+    const j = await post('/accounts/' + id + '/start');
+    if (!j.ok) alert(j.error || '操作失败');
+    else location.reload();
   } else if (btn.dataset.f === 'edit') {
     editID = id;
     const f = document.getElementById('editForm');
@@ -204,6 +215,11 @@ function applyStatus(a) {
   upCell.innerHTML = a.status === 'running' && a.uptime
     ? '<span class="muted small">' + esc(a.uptime) + '</span>'
     : '<span class="muted">-</span>';
+  // 启停按钮切换：enabled 显示 停止/重试，disabled 显示 启动
+  const enabled = a.enabled !== false;
+  row.querySelector('[data-f=stop]').hidden = !enabled;
+  row.querySelector('[data-f=start]').hidden = enabled;
+  row.querySelector('[data-f=restart]').hidden = !enabled;
   const dCell = row.querySelector('[data-f=desktops]');
   const ds = a.desktops || [];
   dCell.innerHTML = ds.length
