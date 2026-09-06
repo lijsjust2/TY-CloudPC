@@ -2,6 +2,7 @@
 package keeper
 
 import (
+	"log"
 	"sync"
 	"time"
 )
@@ -30,12 +31,20 @@ func NewLogBuffer(max int) *LogBuffer {
 }
 
 func (l *LogBuffer) Add(accountID int, account, desktop, level, msg string) {
+	now := time.Now().Format("15:04:05.000")
+	// 同步输出到标准输出，便于 docker logs 排查问题
+	prefix := "[" + now + "] [" + account + "]"
+	if desktop != "" {
+		prefix += " [" + desktop + "]"
+	}
+	log.Println(prefix + " " + msg)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seq++
 	l.entries = append(l.entries, LogEntry{
 		Seq:       l.seq,
-		Time:      time.Now().Format("15:04:05.000"),
+		Time:      now,
 		Account:   account,
 		Desktop:   desktop,
 		Level:     level,

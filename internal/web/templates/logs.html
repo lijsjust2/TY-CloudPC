@@ -21,14 +21,19 @@
 let lastSeq = 0;
 let accountFilter = 0;
 const pane = document.getElementById('logPane');
+// 已显示的日志 seq 集合，用于去重（防止重复渲染）
+const seenSeqs = new Set();
+let pollTimer = null;
 
 document.getElementById('logAccount').addEventListener('change', function () {
   accountFilter = parseInt(this.value, 10) || 0;
   lastSeq = 0;
+  seenSeqs.clear();
   pane.innerHTML = '<div class="log-empty muted">暂无日志</div>';
 });
 
 document.getElementById('clearView').addEventListener('click', function () {
+  seenSeqs.clear();
   pane.innerHTML = '<div class="log-empty muted">暂无日志</div>';
 });
 
@@ -37,6 +42,10 @@ function esc(s) {
 }
 
 function appendLine(e) {
+  // 去重：已显示过的日志直接跳过
+  if (seenSeqs.has(e.seq)) return;
+  seenSeqs.add(e.seq);
+
   const empty = pane.querySelector('.log-empty');
   if (empty) empty.remove();
   const nearBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 60;
@@ -46,10 +55,22 @@ function appendLine(e) {
   if (e.desktop) parts.push('[' + e.desktop + ']');
   div.textContent = parts.join('') + ' ' + e.message;
   pane.appendChild(div);
-  while (pane.children.length > 2000) pane.removeChild(pane.firstChild);
+  while (pane.children.length > 2000) {
+    // 移除最老的一行时，同时从 seenSeqs 中清理对应的 seq
+    const first = pane.firstChild;
+    if (first && first._seq) seenSeqs.delete(first._seq);
+    pane.removeChild(first);
+  }
+  div._seq = e.seq;
   if (nearBottom && document.getElementById('autoScroll').checked) {
     pane.scrollTop = pane.scrollHeight;
   }
+}
+
+function resetAndReload() {
+  lastSeq = 0;
+  seenSeqs.clear();
+  pane.innerHTML = '';
 }
 
 async function poll() {
@@ -57,23 +78,39 @@ async function poll() {
     const r = await fetch('/api/logs?after=' + lastSeq + '&account=' + accountFilter);
     const j = await r.json();
     if (j.ok) {
-      // 服务端重启后 seq 回退，重置游标重拉全量
-      if (typeof j.maxSeq === 'number' && j.maxSeq < lastSeq) {
-        lastSeq = 0;
+      // 服务端重启后 seq 回退，或环形缓冲区滚动导致游标失效，重置重拉
+      const maxSeq = typeof j.maxSeq === 'number' ? j.maxSeq : 0;
+      const logs = j.logs || [];
+      const needReset =
+        // 情况1：服务端 maxSeq 比当前游标还小 → 服务端重启了
+        (maxSeq > 0 && maxSeq < lastSeq) ||
+        // 情况2：游标 > 0，但返回的第一条日志 seq 不连续（中间有缺口）
+        // 说明环形缓冲区已滚动，游标指向的日志已不存在
+        (lastSeq > 0 && logs.length > 0 && logs[0].seq > lastSeq + 1);
+
+      if (needReset) {
+        resetAndReload();
         const r2 = await fetch('/api/logs?after=0&account=' + accountFilter);
         const j2 = await r2.json();
-        pane.innerHTML = '';
-        if (j2.ok && j2.logs) { j2.logs.forEach(appendLine); lastSeq = j2.logs[j2.logs.length - 1].seq; }
-        setTimeout(poll, 2000);
+        if (j2.ok && j2.logs && j2.logs.length) {
+          j2.logs.forEach(appendLine);
+          lastSeq = j2.logs[j2.logs.length - 1].seq;
+        }
+        scheduleNext();
         return;
       }
-      if (j.logs && j.logs.length) {
-        j.logs.forEach(appendLine);
-        lastSeq = j.logs[j.logs.length - 1].seq; // 推进游标，下一轮只拉增量
+      if (logs.length) {
+        logs.forEach(appendLine);
+        lastSeq = logs[logs.length - 1].seq; // 推进游标，下一轮只拉增量
       }
     }
   } catch (e) { /* 忽略瞬时网络错误 */ }
-  setTimeout(poll, 2000);
+  scheduleNext();
+}
+
+function scheduleNext() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, 2000);
 }
 
 poll();
